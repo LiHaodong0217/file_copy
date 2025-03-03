@@ -1,0 +1,142 @@
+import pandas as pd
+import os
+import cv2
+import csv
+
+# 读取标注文件
+train_df = pd.read_csv('/ssd1/jinxiu/PhysVideoGen/epic-kitchens-100-annotations/EPIC_100_train.csv')
+
+# 筛选出 video_id 为 P01_01 的视频片段
+target_video_id = 'P01_01'
+filtered_df = train_df[train_df['video_id'] == target_video_id]
+
+# 构建基于 narration 的索引
+narration_index = {}
+for _, row in filtered_df.iterrows():
+    narration = row['narration']
+    if narration not in narration_index:
+        narration_index[narration] = []
+    narration_index[narration].append({
+        'video_id': row['video_id'],
+        'start_frame': row['start_frame'],
+        'stop_frame': row['stop_frame'],
+        'narration': row['narration']
+    })
+
+# 生成视频片段对
+narration_pairs = []
+for narration, segments in narration_index.items():
+    if len(segments) >= 2:  # 至少有两个片段具有相同的 narration
+        for i in range(len(segments)):
+            for j in range(i + 1, len(segments)):
+                seg1 = segments[i]
+                seg2 = segments[j]
+                # 计算两个片段的帧数
+                frame_count1 = seg1['stop_frame'] - seg1['start_frame'] + 1
+                frame_count2 = seg2['stop_frame'] - seg2['start_frame'] + 1
+                # 检查帧数差异是否超过 10 帧
+                if abs(frame_count1 - frame_count2) > 10:
+                    continue  # 如果超过允许范围，则跳过这个片段对
+                pair = (seg1, seg2, narration)
+                narration_pairs.append(pair)
+
+# 提取视频片段并保存到以 narration 命名的文件夹中
+output_folder_base = '/ssd1/jinxiu/PhysVideoGen/epic-kitchens-100-annotations/epic-kitchens-download-scripts'
+os.makedirs(output_folder_base, exist_ok=True)
+
+# 遍历每个视频片段对并提取片段
+for idx, pair in enumerate(narration_pairs):
+    video1 = pair[0]
+    video2 = pair[1]
+    narration = pair[2]
+
+    # 生成唯一的文件夹名
+    base_folder_name = narration.replace(' ', '_')
+    output_folder = os.path.join(output_folder_base, base_folder_name)
+    count = 1
+    while os.path.exists(output_folder):
+        output_folder = os.path.join(output_folder_base, f"{base_folder_name}_{count}")
+        count += 1
+    os.makedirs(output_folder, exist_ok=True)
+
+    # 提取视频1片段
+    print(f"处理视频片段对 {idx + 1}:")
+    print(f"  视频1: {video1['video_id']} (Frames {video1['start_frame']} - {video1['stop_frame']})")
+    video_path = f"/home/jxliu/EPIC-KITCHENS/P01/videos/{video1['video_id']}.MP4"
+    cap1 = cv2.VideoCapture(video_path)
+    if not cap1.isOpened():
+        print(f"无法打开视频文件: {video_path}")
+        continue
+    cap1.set(cv2.CAP_PROP_POS_FRAMES, video1['start_frame'])
+    fps = cap1.get(cv2.CAP_PROP_FPS)
+    width = int(cap1.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap1.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    output_video_path1 = os.path.join(output_folder, f"{video1['video_id']}_seg1.mp4")
+    out1 = cv2.VideoWriter(output_video_path1, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
+    current_frame = video1['start_frame']
+    while current_frame <= video1['stop_frame'] and cap1.isOpened():
+        ret, frame = cap1.read()
+        if not ret:
+            break
+        out1.write(frame)
+        current_frame += 1
+    cap1.release()
+    out1.release()
+
+    # 提取视频2片段
+    print(f"  视频2: {video2['video_id']} (Frames {video2['start_frame']} - {video2['stop_frame']})")
+    video_path = f"/home/jxliu/EPIC-KITCHENS/P01/videos/{video2['video_id']}.MP4"
+    cap2 = cv2.VideoCapture(video_path)
+    if not cap2.isOpened():
+        print(f"无法打开视频文件: {video_path}")
+        continue
+    cap2.set(cv2.CAP_PROP_POS_FRAMES, video2['start_frame'])
+    fps = cap2.get(cv2.CAP_PROP_FPS)
+    width = int(cap2.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap2.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    output_video_path2 = os.path.join(output_folder, f"{video2['video_id']}_seg2.mp4")
+    out2 = cv2.VideoWriter(output_video_path2, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
+    current_frame = video2['start_frame']
+    while current_frame <= video2['stop_frame'] and cap2.isOpened():
+        ret, frame = cap2.read()
+        if not ret:
+            break
+        out2.write(frame)
+        current_frame += 1
+    cap2.release()
+    out2.release()
+
+    print(f"已保存到文件夹: {output_folder} 的两个视频片段")
+    print()
+
+# 保存结果到 CSV 文件
+output_csv_file = os.path.join(output_folder_base, 'narration_pairs.csv')
+with open(output_csv_file, 'w', newline='') as csvfile:
+    fieldnames = [
+        'pair_id',
+        'narration',
+        'video1_id',
+        'video1_start_frame',
+        'video1_stop_frame',
+        'video2_id',
+        'video2_start_frame',
+        'video2_stop_frame'
+    ]
+    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+    writer.writeheader()
+    for idx, pair in enumerate(narration_pairs):
+        video1 = pair[0]
+        video2 = pair[1]
+        narration = pair[2]
+        writer.writerow({
+            'pair_id': idx + 1,
+            'narration': narration,
+            'video1_id': video1['video_id'],
+            'video1_start_frame': video1['start_frame'],
+            'video1_stop_frame': video1['stop_frame'],
+            'video2_id': video2['video_id'],
+            'video2_start_frame': video2['start_frame'],
+            'video2_stop_frame': video2['stop_frame']
+        })
+
+print(f"提取结果已保存到 {output_csv_file}")
